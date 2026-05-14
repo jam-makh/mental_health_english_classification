@@ -1,6 +1,6 @@
-venv/
-plots
-plots_old
+venv
+./plots
+./plots_old
 *.csv
 __pycache__/
 *.pyc/
