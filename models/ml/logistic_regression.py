@@ -7,15 +7,18 @@ from sklearn.model_selection import (
     train_test_split,
     GridSearchCV,
     StratifiedKFold,
-    cross_validate
 )
-from typing import  Dict, Any, Optional, List
+from typing import  Dict, Any, Optional, Tuple
 
 
 class LogisticRegressionModel:
     """
     Logistic Regression class that handles train/test split,
     hyperparameters tuning, model fitting, predicition
+    Receives pre-split, pre-vectorized arrays only.
+    Splitting and vectorization are handled upstream
+    in cache_embeddings.py to avoid recomputing
+    expensive MentalBERT embeddings.
     """
     def __init__(
         self,
@@ -29,29 +32,6 @@ class LogisticRegressionModel:
         self.model: Optional[LogisticRegression] = None
         self.best_params_: Optional[Dict[str, Any]] = None
         self.grid_search: Optional[GridSearchCV] = None
-
-    def split_data(
-        self,
-        X: np.ndarray,
-        y: np.ndarray
-    ) -> List[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Split the dataset into train and test sets.
-        
-        :param X: Feature matrix.
-        :type X: np.ndarray
-        :param y: Target labels.
-        :type y: np.ndarray
-        :returns: Split datasets.
-        :rtype: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-        """
-        return train_test_split(
-            X,
-            y,
-            test_size=self.test_size,
-            stratify=y,
-            random_state=self.random_state
-        )
 
     def train(
         self,
@@ -82,12 +62,33 @@ class LogisticRegressionModel:
         )
 
         # Hyperparameter search space
-        param_grid = {
-            "penalty": ["l2", "l1", "elasticnet"],
-            "C": [0.01, 0.1, 1.0, 10.0],
-            "solver": ["lbfgs", "saga", "liblinear"],
-            "class_weight": [None, "balanced"]
-        }
+        param_grid =  [
+            # lbfgs: l2 or None only
+            {
+                "solver":       ["lbfgs"],
+                "penalty":      ["l2", None],
+                "C":            [0.01, 0.1, 1.0, 10.0],
+                # class_weighttells the model to penalize mistakes
+                # on minority classes more heavily during training.
+                "class_weight": [None, "balanced"],
+            },
+            # saga: all penalties including elasticnet
+            {
+                "solver":       ["saga"],
+                "penalty":      ["l1", "l2", "elasticnet"],
+                "C":            [0.01, 0.1, 1.0, 10.0],
+                "l1_ratio":     [0.1, 0.5, 0.9],
+                "class_weight": [None, "balanced"],
+            },
+            # liblinear: l1/l2 only, works for binary classification (french dataset)
+            # skipped on multiclass
+            {
+                "solver":       ["liblinear"],
+                "penalty":      ["l1", "l2"],
+                "C":            [0.01, 0.1, 1.0, 10.0],
+                "class_weight": [None, "balanced"],
+            },
+        ]
 
         # Stratified CV preserves label distribution
         stratified_cv = StratifiedKFold(
@@ -104,7 +105,8 @@ class LogisticRegressionModel:
             cv=stratified_cv,
             n_jobs=-1,
             verbose=1,
-            return_train_score=True
+            return_train_score=True,
+            error_score = 0.0
         )
 
         # Train all parameter combinations
@@ -139,60 +141,3 @@ class LogisticRegressionModel:
             raise ValueError("Model has not been trained yet.")
 
         return self.model.predict(X_test)
-
-    def cross_validate_model(
-        self,
-        X,
-        y,
-        cv_splits: int = 5
-    ) -> Dict:
-        """
-        Perform cross-validation using the best model.
-
-        :param X: Feature matrix.
-        :type X: array-like
-        :param y: Target labels.
-        :type y: array-like
-        :param cv_splits: Number of cross-validation folds, by default 5.
-        :type cv_splits: int, optional
-        :returns: Cross-validation metrics.
-        :rtype: Dict
-        :param cv_splits: Number of cross-validation folds, by default 5.
-        :type cv_splits: int, optional
-        """
-
-        if self.model is None:
-            raise ValueError("Train the model before cross-validation.")
-
-        scoring = [
-            "accuracy",
-            "precision_macro",
-            "recall_macro",
-            "f1_macro",
-            "support"
-        ]
-
-        cv_results = cross_validate(
-            self.model,
-            X,
-            y,
-            cv=cv_splits,
-            scoring=scoring,
-            n_jobs=-1
-        )
-
-        return {
-            "accuracy_mean": np.mean(cv_results["test_accuracy"]),
-            "precision_macro_mean": np.mean(
-                cv_results["test_precision_macro"]
-            ),
-            "recall_macro_mean": np.mean(
-                cv_results["test_recall_macro"]
-            ),
-            "f1_macro_mean": np.mean(
-                cv_results["test_f1_macro"]
-            ),
-            "support_mean": np.mean(
-                cv_results["test_support"]
-            )
-        }

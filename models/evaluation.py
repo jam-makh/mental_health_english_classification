@@ -3,7 +3,7 @@ Evaluation utilities for ML and DL models.
 """
 
 from typing import Dict, List, Optional
-
+import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -17,6 +17,59 @@ from sklearn.metrics import (
     f1_score,
 )
 
+from sklearn.model_selection import cross_validate, StratifiedKFold
+
+def cross_validate_model(
+    model,
+    X,
+    y,
+    cv_splits: int = 5,
+    random_state: int = 42,
+) -> Dict:
+    """
+    Perform stratified k-fold cross-validation for a model.
+
+    :param model: Trained or untrained estimator supporting fit/predict.
+    :type model: estimator
+    :param X: Input features for cross-validation.
+    :type X: array-like
+    :param y: Target labels for stratification.
+    :type y: array-like
+    :param cv_splits: Number of folds for cross-validation.
+    :type cv_splits: int
+    :param random_state: Random seed for fold shuffling.
+    :type random_state: int
+    :returns: Dictionary of cross-validation metrics.
+    :rtype: Dict
+    """
+    # Create the stratified cross-validation splitter.
+    cv = StratifiedKFold(
+        n_splits=cv_splits, shuffle=True, random_state=random_state
+    )
+
+    scoring = ["accuracy", "precision_macro", "recall_macro", "f1_macro"]
+
+    # Execute cross-validation across all scoring metrics.
+    cv_results = cross_validate(
+        model, X, y,
+        cv=cv,
+        scoring=scoring,
+        n_jobs=-1,
+    )
+
+    results = {
+        "accuracy_mean":        np.mean(cv_results["test_accuracy"]),
+        "precision_macro_mean": np.mean(cv_results["test_precision_macro"]),
+        "recall_macro_mean":    np.mean(cv_results["test_recall_macro"]),
+        "f1_macro_mean":        np.mean(cv_results["test_f1_macro"]),
+        "f1_macro_std":         np.std(cv_results["test_f1_macro"]),  # useful to report
+    }
+
+    print(f"\nCross-Validation ({cv_splits}-fold):")
+    for k, v in results.items():
+        print(f"  {k}: {v:.4f}")
+
+    return results
 
 def evaluate_model(
     y_true,
@@ -28,38 +81,29 @@ def evaluate_model(
     show_confusion_matrix: bool = True,
 ) -> Dict:
     """
-    Evaluate classification performance on test data, and optionally
-    on training data to detect overfitting.
+    Evaluate classification performance on test data and optionally training data.
 
-    Parameters
-    ----------
-    y_true : array-like
-        Ground truth test labels.
-    y_pred : array-like
-        Predicted test labels.
-    y_train_true : array-like, optional
-        Ground truth training labels. If provided alongside
-        y_train_pred, training metrics are computed and printed.
-    y_train_pred : array-like, optional
-        Predicted training labels.
-    labels : List[str], optional
-        Class label names for display.
-    model_name : str, optional
-        Model display name used in print headers and plot titles.
-    show_confusion_matrix : bool, optional
-        Whether to plot the confusion matrix.
-
-    Returns
-    -------
-    Dict with keys:
-        accuracy, precision_weighted, recall_weighted, f1_weighted,
-        precision_macro, recall_macro, f1_macro,
-        classification_report (dict), report_dataframe (DataFrame),
-        and optionally train_* equivalents if training data is provided.
+    :param y_true: Ground truth test labels.
+    :type y_true: array-like
+    :param y_pred: Predicted test labels.
+    :type y_pred: array-like
+    :param y_train_true: Ground truth training labels.
+    :type y_train_true: array-like, optional
+    :param y_train_pred: Predicted training labels.
+    :type y_train_pred: array-like, optional
+    :param labels: Class label names for display.
+    :type labels: List[str], optional
+    :param model_name: Model display name used in titles.
+    :type model_name: str
+    :param show_confusion_matrix: Whether to plot the confusion matrix.
+    :type show_confusion_matrix: bool
+    :returns: Dictionary containing evaluation metrics and reports.
+    :rtype: Dict
     """
+    # Store evaluation outputs for return.
     result = {}
 
-    # ── Test metrics ──────────────────────────────────────────────────
+    # Test metrics
     test_metrics = _compute_metrics(y_true, y_pred, labels)
     result.update(test_metrics)
 
@@ -81,8 +125,9 @@ def evaluate_model(
     print(f"\nClassification Report — {model_name}\n")
     print(test_metrics["report_dataframe"].to_string())
 
-    # ── Confusion matrix ──────────────────────────────────────────────
+    # Confusion matrix 
     if show_confusion_matrix:
+        # Build a confusion matrix to visualize class-level errors.
         cm = confusion_matrix(y_true, y_pred)
         tick_labels = labels if labels is not None else True
 
@@ -106,9 +151,18 @@ def evaluate_model(
 
 def _compute_metrics(y_true, y_pred, labels: Optional[List[str]]) -> Dict:
     """
-    Compute accuracy, weighted and macro precision/recall/F1,
-    plus the full classification report.
+    Compute accuracy, weighted and macro precision/recall/F1, plus the classification report.
+
+    :param y_true: Ground truth labels.
+    :type y_true: array-like
+    :param y_pred: Predicted labels.
+    :type y_pred: array-like
+    :param labels: Optional class label names.
+    :type labels: List[str], optional
+    :returns: Computed metric values and report objects.
+    :rtype: Dict
     """
+    # Compute weighted and macro metrics for the output labels.
     accuracy  = accuracy_score(y_true, y_pred)
 
     precision_w = precision_score(y_true, y_pred, average="weighted", zero_division=0)
@@ -141,7 +195,14 @@ def _compute_metrics(y_true, y_pred, labels: Optional[List[str]]) -> Dict:
 
 
 def _print_metrics(metrics: Dict) -> None:
-    """Print accuracy, weighted, and macro metrics in a readable block."""
+    """
+    Print accuracy, weighted, and macro metrics in a readable block.
+
+    :param metrics: Dictionary containing metric values.
+    :type metrics: Dict
+    :returns: None
+    :rtype: None
+    """
     print(f"  Accuracy            : {metrics['accuracy']:.4f}")
     print(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
     print(f"  Recall    (weighted): {metrics['recall_weighted']:.4f}")

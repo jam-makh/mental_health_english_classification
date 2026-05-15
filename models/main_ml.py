@@ -3,12 +3,8 @@ main_ml.py
 
 Loads pre-cached embeddings from disk (produced by cache_embeddings.py),
 then trains and evaluates all ML models against both vectorizers.
-Vectorization is never repeated here.
+Vectorization is not repeated here as it would take too much time.
 
-Run order
----------
-    1. python cache_embeddings.py
-    2. python main_ml.py
 """
 
 import joblib
@@ -16,28 +12,21 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from scipy.sparse import load_npz
+from evaluation import cross_validate_model
 
-from models.evaluation import evaluate_model
-from models.ml.logistic_regression import LogisticRegressionModel
-from models.ml.svm import SVMModel
-from models.ml.random_forest import RandomForestModel
+from evaluation import evaluate_model
+from ml.logistic_regression import LogisticRegressionModel
+from ml.svm import SVMClassifier
 
 
 def _load_cache(cache_dir: str) -> dict:
     """
-    Load all cached embeddings and labels from disk.
+    Load cached embeddings and labels from disk.
 
-    Parameters
-    ----------
-    cache_dir : str
-        Directory written by cache_embeddings.py.
-
-    Returns
-    -------
-    dict with keys:
-        y_train, y_test,
-        tfidf      → (X_train, X_test),
-        mentalbert → (X_train, X_test)   only if files exist
+    :param cache_dir: Directory written by cache_embeddings.py.
+    :type cache_dir: str
+    :returns: Cache dictionary with labels and feature matrices.
+    :rtype: dict
     """
     p = Path(cache_dir)
     cache = {
@@ -64,41 +53,37 @@ def run_ml_pipeline(
 ) -> pd.DataFrame:
     """
     Train and evaluate all ML models using pre-cached embeddings.
-    A try/except around each (model, vectorizer) combination ensures
-    one failure does not abort the entire run.
 
-    Parameters
-    ----------
-    cache_dir : str
-        Directory produced by cache_embeddings.py.
-    labels : list[str], optional
-        Class label names.
-
-    Returns
-    -------
-    pd.DataFrame
-        One row per (model, vectorizer) with train and test metrics.
-        Failed combinations are recorded with NaN metrics.
+    :param cache_dir: Directory produced by cache_embeddings.py.
+    :type cache_dir: str
+    :param labels: Class label names.
+    :type labels: list[str], optional
+    :returns: Summary DataFrame with metrics for each model/vectorizer.
+    :rtype: pd.DataFrame
     """
     if labels is None:
         labels = ["Anxiety", "Depression", "Suicidal", "Normal"]
 
+    # Load cached label arrays and feature matrices for evaluation.
     cache   = _load_cache(cache_dir)
     y_train = cache["y_train"]
     y_test  = cache["y_test"]
 
+    # Always include TF-IDF; include MentalBERT only when cached embeddings exist.
     vectorizer_sets = {"TF-IDF": cache["tfidf"]}
     if "mentalbert" in cache:
         vectorizer_sets["MentalBERT"] = cache["mentalbert"]
 
+    # Instantiate the model classes used for evaluation.
     models = {
         "Logistic Regression": LogisticRegressionModel(),
-        "SVM":                 SVMModel(),
-        "Random Forest":       RandomForestModel(),
+        "SVM":                 SVMClassifier(),
     }
 
+    # Accumulate results for all model/vectorizer combinations.
     all_results = []
 
+    # Evaluate each vectorizer's features with every model.
     for vec_name, (X_train, X_test) in vectorizer_sets.items():
         print(f"\n{'=' * 60}")
         print(f"Vectorizer: {vec_name}")
@@ -108,14 +93,17 @@ def run_ml_pipeline(
             print(f"\n--- {model_name} | {vec_name} ---")
 
             try:
-                # ── Train ─────────────────────────────────────────────
+                # Train the model on the current vectorized training split.
                 model.train(X_train, y_train)
 
-                # ── Predict on both splits ─────────────────────────────
+                # Measure generalization with cross-validation on training data.
+                cv_results = cross_validate_model(model.model, X_train, y_train)
+
+                # Predict both the training and test splits for overfitting checks.
                 y_train_pred = model.predict(X_train)
                 y_test_pred  = model.predict(X_test)
 
-                # ── Evaluate (train + test) ────────────────────────────
+                # Evaluate metrics and optionally show a confusion matrix.
                 result = evaluate_model(
                     y_true=y_test,
                     y_pred=y_test_pred,
@@ -126,25 +114,29 @@ def run_ml_pipeline(
                     show_confusion_matrix=True,
                 )
 
+                # Append the result row for this model/vectorizer combination.
                 all_results.append({
                     "Model":                model_name,
                     "Vectorizer":           vec_name,
-                    # ── Train ──
+                    # Train
                     "Train Accuracy":       round(result.get("train_accuracy",        float("nan")), 4),
                     "Train Precision (W)":  round(result.get("train_precision_weighted", float("nan")), 4),
                     "Train Recall (W)":     round(result.get("train_recall_weighted",    float("nan")), 4),
                     "Train F1 (W)":         round(result.get("train_f1_weighted",        float("nan")), 4),
                     "Train F1 (Macro)":     round(result.get("train_f1_macro",           float("nan")), 4),
-                    # ── Test ───
+                    # Test
                     "Test Accuracy":        round(result["accuracy"],           4),
                     "Test Precision (W)":   round(result["precision_weighted"], 4),
                     "Test Recall (W)":      round(result["recall_weighted"],    4),
                     "Test F1 (W)":          round(result["f1_weighted"],        4),
                     "Test F1 (Macro)":      round(result["f1_macro"],           4),
+                    "CV F1 Macro (mean)": round(cv_results["f1_macro_mean"], 4),
+                    "CV F1 Macro (std)":  round(cv_results["f1_macro_std"],  4),
                     "Status":               "OK",
                 })
 
             except Exception as exc:
+                # Capture failures without stopping the full pipeline.
                 print(f"  [ERROR] {model_name} | {vec_name} failed: {exc}")
                 all_results.append({
                     "Model":               model_name,

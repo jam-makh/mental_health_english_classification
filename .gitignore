@@ -1,6 +1,9 @@
 venv
-./plots
-./plots_old
+plots
+plots_old
 *.csv
 __pycache__/
 *.pyc/
+main_dl.py
+main_llm.py
+cache
